@@ -1,10 +1,12 @@
 #include <ArduinoJson.h>
-
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
 #include <FS.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
 
 const char* ssid = "barabasz";
 const char* password = "My heart is beating";
@@ -14,8 +16,12 @@ String temperatureSetting = "20";
 String temperatureCurrent = "19";
 String relayState = "false";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
-static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  // initialize such that a reading is due the first time through loop()
-  
+static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
+#define ONE_WIRE_BUS 2  // DS18B20 pin
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+float oldTemp;
+
 String _index_html = "<!DOCTYPE html>\
                <html ng-app='myApp'>\
                 <head>\
@@ -35,11 +41,12 @@ String _index_html = "<!DOCTYPE html>\
                   <button class='btn btn-default' ng-click='save()'>Save</button><br/>\
                   <script>\
                     var app = angular.module('myApp', []);\
-                    app.controller('myCtrl', ['$scope','$http',function($scope,$http) {\
+                    app.controller('myCtrl', ['$scope','$http','$interval',function($scope, $http, $interval) {\
                         initialize();\
                         function initialize(){\
                           $http.get('/api/data').then(function(response) {console.log(response.data);$scope.data=response.data;});\
                         }\
+                        $interval(function(){initialize();}.bind(this), 300000);\
                         $scope.turnOn = function(){\
                           $http.get('/api/on').then(function(response) {initialize();});\
                         };\
@@ -55,28 +62,30 @@ String _index_html = "<!DOCTYPE html>\
               </html>";
 
 void persist(){
-  // Create storage
+  // Create JSON
   StaticJsonBuffer<200> jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
   root["temperatureSetting"] = temperatureSetting;
   root["relayState"] = relayState;
   root["temperatureCurrent"] = temperatureCurrent;
   
-  // remove old file
+  // Remove old file
   if(SPIFFS.exists(path)){
     SPIFFS.remove(path);
   }
 
-  // store new file
+  // Store new file
   File file = SPIFFS.open(path, "w");
   root.printTo(file);
   file.close();
-  Serial.println("Written");
+  Serial.println("Persisting");
+  root.printTo(Serial);
+  Serial.println("Persisted");
   
 }
 
 String readFromStorage(){
-  Serial.println("Reading value");
+   Serial.println("Reading");
    String str = "";
     File file = SPIFFS.open(path, "r");
     if (!file) {
@@ -84,8 +93,8 @@ String readFromStorage(){
     }
     else {
      str = file.readString();
-     Serial.println("Value read:");
      Serial.println(str);
+     Serial.println("Read");
      file.close();
      
      StaticJsonBuffer<200> jsonBuffer;
@@ -108,15 +117,28 @@ String readFromStorage(){
 }
 
 
+void relayOn(){
+  digitalWrite(D1, 1);
+  relayState = "true";
+  persist();
+}
+
+void relayOff(){
+  digitalWrite(D1, 0);
+  relayState = "false";
+  persist();
+}
+
 void setup(void){
   SPIFFS.begin();
   pinMode(D1, OUTPUT);
-
+  oldTemp = -1;
+  // restore previous state
   readFromStorage();
   if (relayState == "true"){
-    digitalWrite(D1, 1);
+    relayOn();
   }else{
-    digitalWrite(D1, 0);
+    relayOff();
   }
   
   Serial.begin(115200);
@@ -142,15 +164,11 @@ void setup(void){
     server.send(200, "text/html", _index_html);
   });
   server.on("/api/on",[](){
-    digitalWrite(D1, 1);
-    relayState = "true";
-    persist();
+    relayOn();
     server.send(200, "text/html", "");
   });
   server.on("/api/off",[](){
-    digitalWrite(D1, 0);
-    relayState = "false";
-    persist();
+    relayOff();
     server.send(200, "text/html", "");
   });
 
@@ -168,18 +186,31 @@ void setup(void){
   Serial.println("HTTP server started");
 }
 
+float readTemperature(){
+  float temp;
+  do {
+    DS18B20.requestTemperatures(); 
+    temp = DS18B20.getTempCByIndex(0);
+    Serial.print("Temperature: ");
+    Serial.println(temp);
+  } while (temp == 85.0 || temp == (-127.0));
+  
+  return temp;
+}
+
 void loop(void){
    unsigned long now = millis();
    if (now - lastSampleTime >= timeBetweenMeasures){
       lastSampleTime += timeBetweenMeasures;
-      Serial.println("Checking temperature");
-      // read temperature and store it to temperatureCurrent
+      // TODO: read temperature and store it to temperatureCurrent
+      // temperatureCurrent = readTemperature();
+      Serial.println("Checking temperature. Current reading is:" + temperatureCurrent + " Setting is:" + temperatureSetting);
       if (temperatureCurrent < temperatureSetting){
         Serial.println("Heating!");
-        digitalWrite(D1, 1);
+        relayOn();
       }else{
-        Serial.println("No more heating!");
-        digitalWrite(D1, 0);
+        Serial.println("Stop heating!");
+        relayOff();
       }
    }
    server.handleClient();
