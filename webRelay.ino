@@ -22,26 +22,33 @@ String page = "<!DOCTYPE html>\
                   <link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css'>\
                   <link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap-theme.min.css'>\
                 </head>\
-                <body>\
+                <body ng-controller='myCtrl'>\
                   <h1>Hello from esp8266!</h1><br/>\
                   Temperature reading: _temperatureCurrent_<br/>\
-                  Relay is: _relayState_<br/>\
+                  Relay is: {{relayState}}<br/>\
+                  <button ng-click='turnOn()'>On</button><br/>\
+                  <button ng-click='turnOff()'>Off</button><br/>\
                   <a href='on'>on</a></a><br/>\
                   <a href='off'>off</a></a><br/>\
                   <form action='update' method='get'>\
                   Temperature setting: <input type='text' name='temp' value='_temperatureSetting_'><br>\
                   <input type='submit' value='Submit'>\
                   </form>\
-                  <div  ng-controller='myCtrl'>\
+                  <div>\
                     <p>Input something in the input box:</p>\
                     <p>Name : <input type='text' ng-model='name' placeholder='Enter name here'></p>\
                     <h1>Hello {{name}}</h1>\
                   </div>\
                   <script>\
                     var app = angular.module('myApp', []);\
-                    app.controller('myCtrl', function($scope) {\
-                        $scope.firstName= 'John';\
-                    });\
+                    app.controller('myCtrl', ['$scope','$http',function($scope,$http) {\
+                        $scope.turnOn = function(){\
+                          $http.get('/api/on').then(function(response) {});\
+                        };\
+                        $scope.turnOff = function(){\
+                          $http.get('/api/off').then(function(response) {});\
+                        };\
+                    }]);\
                   </script>\
                 </body>\
               </html>";
@@ -149,23 +156,23 @@ void setup(void){
   server.on("/", [](){
     server.send(200, "text/html", getPage());
   });
-  server.on("/on",[](){
+  server.on("/api/on",[](){
     digitalWrite(D1, 1);
     relayState = "true";
     persist();
-    server.send(200, "text/html", getPage());
+    server.send(200, "text/html", "");
   });
-  server.on("/off",[](){
+  server.on("/api/off",[](){
     digitalWrite(D1, 0);
     relayState = "false";
     persist();
-    server.send(200, "text/html", getPage());
+    server.send(200, "text/html", "");
   });
 
-  server.on("/update",[](){
+  server.on("/api/update",[](){
     temperatureSetting = server.arg(0);
     persist();
-    server.send(200, "text/html", getPage());
+    server.send(200, "text/html", "");
   });
 
   //get heap status, analog input value and all GPIO statuses in one json call
