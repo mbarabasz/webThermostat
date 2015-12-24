@@ -13,7 +13,10 @@ String path ="/storage.json";
 String temperatureSetting = "20";
 String temperatureCurrent = "19";
 String relayState = "false";
-String page = "<!DOCTYPE html>\
+const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
+static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  // initialize such that a reading is due the first time through loop()
+  
+String _index_html = "<!DOCTYPE html>\
                <html ng-app='myApp'>\
                 <head>\
                   <script src='http://ajax.googleapis.com/ajax/libs/angularjs/1.4.8/angular.min.js'></script>\
@@ -23,30 +26,28 @@ String page = "<!DOCTYPE html>\
                   <link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap-theme.min.css'>\
                 </head>\
                 <body ng-controller='myCtrl'>\
-                  <h1>Hello from esp8266!</h1><br/>\
-                  Temperature reading: _temperatureCurrent_<br/>\
-                  Relay is: {{relayState}}<br/>\
-                  <button ng-click='turnOn()'>On</button><br/>\
-                  <button ng-click='turnOff()'>Off</button><br/>\
-                  <a href='on'>on</a></a><br/>\
-                  <a href='off'>off</a></a><br/>\
-                  <form action='update' method='get'>\
-                  Temperature setting: <input type='text' name='temp' value='_temperatureSetting_'><br>\
-                  <input type='submit' value='Submit'>\
-                  </form>\
-                  <div>\
-                    <p>Input something in the input box:</p>\
-                    <p>Name : <input type='text' ng-model='name' placeholder='Enter name here'></p>\
-                    <h1>Hello {{name}}</h1>\
-                  </div>\
+                  <h1>ESP8266 Thermostat</h1><br/>\
+                  Temperature reading: {{data.temperatureCurrent}}<br/>\
+                  Relay status: {{data.relayState}}\
+                  <button class='btn btn-default' ng-click='turnOn()' ng-disabled=\"data.relayState==='true'\">On</button>\
+                  <button class='btn btn-default' ng-click='turnOff()' ng-disabled=\"data.relayState==='false'\">Off</button><br/>\
+                  Temperature setting: <input type='text' name='temp' value='{{data.temperatureSetting}}'>\
+                  <button class='btn btn-default' ng-click='save()'>Save</button><br/>\
                   <script>\
                     var app = angular.module('myApp', []);\
                     app.controller('myCtrl', ['$scope','$http',function($scope,$http) {\
+                        initialize();\
+                        function initialize(){\
+                          $http.get('/api/data').then(function(response) {console.log(response.data);$scope.data=response.data;});\
+                        }\
                         $scope.turnOn = function(){\
-                          $http.get('/api/on').then(function(response) {});\
+                          $http.get('/api/on').then(function(response) {initialize();});\
                         };\
                         $scope.turnOff = function(){\
-                          $http.get('/api/off').then(function(response) {});\
+                          $http.get('/api/off').then(function(response) {initialize();});\
+                        };\
+                        $scope.save = function(){\
+                          $http.get('/api/save',{params: { temperatureSetting: $scope.data.temperatureSetting }}).then(function(response) {});\
                         };\
                     }]);\
                   </script>\
@@ -59,7 +60,8 @@ void persist(){
   JsonObject& root = jsonBuffer.createObject();
   root["temperatureSetting"] = temperatureSetting;
   root["relayState"] = relayState;
-
+  root["temperatureCurrent"] = temperatureCurrent;
+  
   // remove old file
   if(SPIFFS.exists(path)){
     SPIFFS.remove(path);
@@ -73,7 +75,7 @@ void persist(){
   
 }
 
-void readFromStorage(){
+String readFromStorage(){
   Serial.println("Reading value");
    String str = "";
     File file = SPIFFS.open(path, "r");
@@ -96,32 +98,15 @@ void readFromStorage(){
      if (root.containsKey("relayState")){
         relayState = root["relayState"].asString();
      }
+
+     if (root.containsKey("temperatureCurrent")){
+        temperatureCurrent = root["temperatureCurrent"].asString();
+     }
+     return str;
     }
+    return "";
 }
 
-String getPage(){
-  readFromStorage();
-  String preview = page;
-  preview.replace("_temperatureSetting_",temperatureSetting);
-  preview.replace("_temperatureCurrent_",temperatureCurrent);
-  preview.replace("_relayState_",relayState);
-  return preview;
-}
-
-void handleNotFound(){
-  String message = "File Not Found\n\n";
-  message += "URI: ";
-  message += server.uri();
-  message += "\nMethod: ";
-  message += (server.method() == HTTP_GET)?"GET":"POST";
-  message += "\nArguments: ";
-  message += server.args();
-  message += "\n";
-  for (uint8_t i=0; i<server.args(); i++){
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-  }
-  server.send(404, "text/plain", message);
-}
 
 void setup(void){
   SPIFFS.begin();
@@ -154,7 +139,7 @@ void setup(void){
   }
 
   server.on("/", [](){
-    server.send(200, "text/html", getPage());
+    server.send(200, "text/html", _index_html);
   });
   server.on("/api/on",[](){
     digitalWrite(D1, 1);
@@ -169,29 +154,33 @@ void setup(void){
     server.send(200, "text/html", "");
   });
 
-  server.on("/api/update",[](){
+  server.on("/api/save",[](){
     temperatureSetting = server.arg(0);
     persist();
     server.send(200, "text/html", "");
   });
 
-  //get heap status, analog input value and all GPIO statuses in one json call
-  server.on("/info", HTTP_GET, [](){
-    String json = "{";
-    json += "\"heap\":"+String(ESP.getFreeHeap());
-    json += ", \"analog\":"+String(analogRead(A0));
-    json += ", \"gpio\":"+String((uint32_t)(((GPI | GPO) & 0xFFFF) | ((GP16I & 0x01) << 16)));
-    json += "}";
-    server.send(200, "text/json", json);
-    json = String();
+  server.on("/api/data",[](){
+    server.send(200, "application/json", readFromStorage());
   });
-
-  server.onNotFound(handleNotFound);
 
   server.begin();
   Serial.println("HTTP server started");
 }
 
 void loop(void){
-  server.handleClient();
+   unsigned long now = millis();
+   if (now - lastSampleTime >= timeBetweenMeasures){
+      lastSampleTime += timeBetweenMeasures;
+      Serial.println("Checking temperature");
+      // read temperature and store it to temperatureCurrent
+      if (temperatureCurrent < temperatureSetting){
+        Serial.println("Heating!");
+        digitalWrite(D1, 1);
+      }else{
+        Serial.println("No more heating!");
+        digitalWrite(D1, 0);
+      }
+   }
+   server.handleClient();
 }
