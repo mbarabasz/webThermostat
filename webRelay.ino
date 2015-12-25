@@ -7,20 +7,22 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+#define ONE_WIRE_BUS 2  // DS18B20 pin
+#define RELAY_PIN D1 // Relay pin
 
 const char* ssid = "barabasz";
 const char* password = "My heart is beating";
-ESP8266WebServer server(80);
-String path ="/storage.json";
-String temperatureSetting = "20";
-String temperatureCurrent = "19";
-String relayState = "false";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
+
+String storageFilePath ="/storage.json";
+String temperatureSetting = "20"; //Defaults only for case when there is no storage yet
+float temperatureCurrent = 19.0;
+String relayState = "false";
 static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
-#define ONE_WIRE_BUS 2  // DS18B20 pin
+
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
-float oldTemp;
+ESP8266WebServer server(80);
 
 String _index_html = "<!DOCTYPE html>\
                <html ng-app='myApp'>\
@@ -32,9 +34,10 @@ String _index_html = "<!DOCTYPE html>\
                   <link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap-theme.min.css'>\
                 </head>\
                 <body ng-controller='myCtrl'>\
-                  <h1>ESP8266 Thermostat</h1><br/>\
+                  <h1>ESP8266 Thermostat</h1><hr>\
+                  <div style='color:#C00000'>{{status}}</div><hr>\
                   Temperature reading: {{data.temperatureCurrent}}<br/>\
-                  Relay status: {{data.relayState}}\
+                  Relay status: {{data.relayState}}<hr>\
                   <button class='btn btn-default' ng-click='turnOn()' ng-disabled=\"data.relayState==='true'\">On</button>\
                   <button class='btn btn-default' ng-click='turnOff()' ng-disabled=\"data.relayState==='false'\">Off</button><br/>\
                   Temperature setting: <input type='text' name='temp' value='{{data.temperatureSetting}}'>\
@@ -44,17 +47,21 @@ String _index_html = "<!DOCTYPE html>\
                     app.controller('myCtrl', ['$scope','$http','$interval',function($scope, $http, $interval) {\
                         initialize();\
                         function initialize(){\
-                          $http.get('/api/data').then(function(response) {console.log(response.data);$scope.data=response.data;});\
+                          $scope.status='Getting data...';\
+                          $http.get('/api/data').then(function(response) {console.log(response.data);$scope.data=response.data;$scope.status='Ready';});\
                         }\
                         $interval(function(){initialize();}.bind(this), 300000);\
-                        $scope.turnOn = function(){\
+                        $scope.turnOn = function(){\\
+                          $scope.status='Turning on...';\
                           $http.get('/api/on').then(function(response) {initialize();});\
                         };\
                         $scope.turnOff = function(){\
+                         $scope.status='Turning off...';\
                           $http.get('/api/off').then(function(response) {initialize();});\
                         };\
                         $scope.save = function(){\
-                          $http.get('/api/save',{params: { temperatureSetting: $scope.data.temperatureSetting }}).then(function(response) {});\
+                          $scope.status='Saving...';\
+                          $http.get('/api/save',{params: { temperatureSetting: $scope.data.temperatureSetting }}).then(function(response) {$scope.status='Ready';});\
                         };\
                     }]);\
                   </script>\
@@ -70,12 +77,12 @@ void persist(){
   root["temperatureCurrent"] = temperatureCurrent;
   
   // Remove old file
-  if(SPIFFS.exists(path)){
-    SPIFFS.remove(path);
+  if(SPIFFS.exists(storageFilePath)){
+    SPIFFS.remove(storageFilePath);
   }
 
   // Store new file
-  File file = SPIFFS.open(path, "w");
+  File file = SPIFFS.open(storageFilePath, "w");
   root.printTo(file);
   file.close();
   Serial.println("Persisting");
@@ -87,7 +94,7 @@ void persist(){
 String readFromStorage(){
    Serial.println("Reading");
    String str = "";
-    File file = SPIFFS.open(path, "r");
+    File file = SPIFFS.open(storageFilePath, "r");
     if (!file) {
       Serial.println("Can't open SPIFFS file !\r\n");          
     }
@@ -109,7 +116,7 @@ String readFromStorage(){
      }
 
      if (root.containsKey("temperatureCurrent")){
-        temperatureCurrent = root["temperatureCurrent"].asString();
+        temperatureCurrent = root["temperatureCurrent"];
      }
      return str;
     }
@@ -118,21 +125,20 @@ String readFromStorage(){
 
 
 void relayOn(){
-  digitalWrite(D1, 1);
+  digitalWrite(RELAY_PIN, 1);
   relayState = "true";
   persist();
 }
 
 void relayOff(){
-  digitalWrite(D1, 0);
+  digitalWrite(RELAY_PIN, 0);
   relayState = "false";
   persist();
 }
 
 void setup(void){
   SPIFFS.begin();
-  pinMode(D1, OUTPUT);
-  oldTemp = -1;
+  pinMode(RELAY_PIN, OUTPUT);
   // restore previous state
   readFromStorage();
   if (relayState == "true"){
@@ -173,7 +179,8 @@ void setup(void){
   });
 
   server.on("/api/save",[](){
-    temperatureSetting = server.arg(0);
+    temperatureSetting = server.arg("temperatureSetting");
+    
     persist();
     server.send(200, "text/html", "");
   });
@@ -204,9 +211,10 @@ void loop(void){
       lastSampleTime += timeBetweenMeasures;
       // TODO: read temperature and store it to temperatureCurrent
       // temperatureCurrent = readTemperature();
-      Serial.println("Checking temperature. Current reading is:" + temperatureCurrent + " Setting is:" + temperatureSetting);
-      if (temperatureCurrent < temperatureSetting){
-        Serial.println("Heating!");
+      // persist();
+      // Serial.println("Checking temperature. Current reading is:" + temperatureCurrent + " Setting is:" + temperatureSetting);
+      if (temperatureCurrent < temperatureSetting.toFloat()){
+        Serial.println("Start heating!");
         relayOn();
       }else{
         Serial.println("Stop heating!");
