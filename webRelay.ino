@@ -13,12 +13,14 @@
 const char* ssid = "barabasz";
 const char* password = "My heart is beating";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
+const char* host = "time.nist.gov"; // Round-robin DAYTIME protocol
 
 String storageFilePath ="/storage.json";
 String temperatureSetting = "20"; //Defaults only for case when there is no storage yet
 float temperatureCurrent = 19.0;
 String relayState = "false";
 static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
+String TimeDate;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -205,8 +207,48 @@ float readTemperature(){
   return temp;
 }
 
-void loop(void){
-   unsigned long now = millis();
+void readTime(){
+  Serial.print("connecting to ");
+  Serial.println(host);
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+  const int httpPort = 13;
+
+  if (!client.connect(host, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+  
+  // This will send the request to the server
+  client.print("HEAD / HTTP/1.1\r\nAccept: */*\r\nUser-Agent: Mozilla/4.0 (compatible; ESP8266 NodeMcu Lua;)\r\n\r\n");
+
+  delay(100);
+
+  // Read all the lines of the reply from server and print them to Serial
+  // expected line is like : Date: Thu, 01 Jan 2015 22:00:14 GMT
+  char buffer[12];
+  String dateTime = "";
+
+  while(client.available())
+  {
+    String line = client.readStringUntil('\r');
+
+    if (line.indexOf("Date") != -1)
+    {
+      Serial.print("=====>");
+    } else
+    {
+      // Serial.print(line);
+      // date starts at pos 7
+      TimeDate = line.substring(7);
+      Serial.println(TimeDate);
+    }
+  }
+}
+
+void doThermostatThingy(){
+  unsigned long now = millis();
    if (now - lastSampleTime >= timeBetweenMeasures){
       lastSampleTime += timeBetweenMeasures;
       // TODO: read temperature and store it to temperatureCurrent
@@ -221,5 +263,10 @@ void loop(void){
         relayOff();
       }
    }
+}
+
+void loop(void){
+   doThermostatThingy();
+   //readTime();
    server.handleClient();
 }
