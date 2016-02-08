@@ -2,18 +2,16 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
 #include <FS.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define ONE_WIRE_BUS 2  // DS18B20 pin
+#define ONE_WIRE_BUS D2  // DS18B20 pin
 #define RELAY_PIN D1 // Relay pin
 
-const char* ssid = "barabasz";
-const char* password = "My heart is beating";
+const char* ssid = "pregowane_niewiadomo_co";
+const char* password = "@Bynum17";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
-const char* host = "time.nist.gov"; // Round-robin DAYTIME protocol
 
 String storageFilePath ="/storage.json";
 String temperatureSetting = "20"; //Defaults only for case when there is no storage yet
@@ -21,6 +19,7 @@ float temperatureCurrent = 19.0;
 String relayState = "false";
 static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
 String TimeDate;
+boolean automaticTemperature;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -40,10 +39,20 @@ String _index_html = "<!DOCTYPE html>\
                   <div style='color:#C00000'>{{status}}</div><hr>\
                   Temperature reading: {{data.temperatureCurrent}}<br/>\
                   Relay status: {{data.relayState}}<hr>\
+                  <label>Automatic: \
+                  <input type='checkbox' ng-model='data.automaticTemperature' ng-true-value='1' ng-false-value='0'>\
+                  </label><br/>\
+                  <div ng-hide='data.automaticTemperature'>\
                   <button class='btn btn-default' ng-click='turnOn()' ng-disabled=\"data.relayState==='true'\">On</button>\
                   <button class='btn btn-default' ng-click='turnOff()' ng-disabled=\"data.relayState==='false'\">Off</button><br/>\
-                  Temperature setting: <input type='text' name='temp' value='{{data.temperatureSetting}}'>\
+                  </div>\
+                  <div ng-show='data.automaticTemperature'>\
+                  Temperature setting: <input type='text' name='temp' ng-model='data.temperatureSetting'>\
+                  </div>\
                   <button class='btn btn-default' ng-click='save()'>Save</button><br/>\
+                  <div class='container'>\
+                  <p class='text-muted text-center'>&copy; 2016 Marcin Barabasz</p>\
+                  </div>\
                   <script>\
                     var app = angular.module('myApp', []);\
                     app.controller('myCtrl', ['$scope','$http','$interval',function($scope, $http, $interval) {\
@@ -63,7 +72,7 @@ String _index_html = "<!DOCTYPE html>\
                         };\
                         $scope.save = function(){\
                           $scope.status='Saving...';\
-                          $http.get('/api/save',{params: { temperatureSetting: $scope.data.temperatureSetting }}).then(function(response) {$scope.status='Ready';});\
+                          $http.get('/api/save',{params: { temperatureSetting: $scope.data.temperatureSetting, automaticTemperature: $scope.data.automaticTemperature }}).then(function(response) {initialize();});\
                         };\
                     }]);\
                   </script>\
@@ -77,6 +86,7 @@ void persist(){
   root["temperatureSetting"] = temperatureSetting;
   root["relayState"] = relayState;
   root["temperatureCurrent"] = temperatureCurrent;
+  root["automaticTemperature"] = automaticTemperature;
   
   // Remove old file
   if(SPIFFS.exists(storageFilePath)){
@@ -119,6 +129,10 @@ String readFromStorage(){
 
      if (root.containsKey("temperatureCurrent")){
         temperatureCurrent = root["temperatureCurrent"];
+     }
+
+     if (root.containsKey("automaticTemperature")){
+        automaticTemperature = root["automaticTemperature"];
      }
      return str;
     }
@@ -164,9 +178,12 @@ void setup(void){
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
-  if (MDNS.begin("esp8266")) {
-    Serial.println("MDNS responder started");
-  }
+
+
+//WiFi.softAP("ESP8266Thermostat");
+//IPAddress myIP = WiFi.softAPIP();
+
+  
 
   server.on("/", [](){
     server.send(200, "text/html", _index_html);
@@ -182,7 +199,13 @@ void setup(void){
 
   server.on("/api/save",[](){
     temperatureSetting = server.arg("temperatureSetting");
-    
+    if (server.arg("automaticTemperature") == "1"){
+      automaticTemperature = true;
+    }else{
+      automaticTemperature = false;
+    }
+    // reset last measure time
+    lastSampleTime = 0 - timeBetweenMeasures;
     persist();
     server.send(200, "text/html", "");
   });
@@ -207,66 +230,30 @@ float readTemperature(){
   return temp;
 }
 
-void readTime(){
-  Serial.print("connecting to ");
-  Serial.println(host);
-
-  // Use WiFiClient class to create TCP connections
-  WiFiClient client;
-  const int httpPort = 13;
-
-  if (!client.connect(host, httpPort)) {
-    Serial.println("connection failed");
-    return;
-  }
-  
-  // This will send the request to the server
-  client.print("HEAD / HTTP/1.1\r\nAccept: */*\r\nUser-Agent: Mozilla/4.0 (compatible; ESP8266 NodeMcu Lua;)\r\n\r\n");
-
-  delay(100);
-
-  // Read all the lines of the reply from server and print them to Serial
-  // expected line is like : Date: Thu, 01 Jan 2015 22:00:14 GMT
-  char buffer[12];
-  String dateTime = "";
-
-  while(client.available())
-  {
-    String line = client.readStringUntil('\r');
-
-    if (line.indexOf("Date") != -1)
-    {
-      Serial.print("=====>");
-    } else
-    {
-      // Serial.print(line);
-      // date starts at pos 7
-      TimeDate = line.substring(7);
-      Serial.println(TimeDate);
-    }
-  }
-}
-
-void doThermostatThingy(){
+void doThermostat(){
   unsigned long now = millis();
    if (now - lastSampleTime >= timeBetweenMeasures){
       lastSampleTime += timeBetweenMeasures;
-      // TODO: read temperature and store it to temperatureCurrent
-      // temperatureCurrent = readTemperature();
-      // persist();
-      // Serial.println("Checking temperature. Current reading is:" + temperatureCurrent + " Setting is:" + temperatureSetting);
-      if (temperatureCurrent < temperatureSetting.toFloat()){
-        Serial.println("Start heating!");
-        relayOn();
-      }else{
-        Serial.println("Stop heating!");
-        relayOff();
+      temperatureCurrent = readTemperature();
+      persist();
+      Serial.print("Checking temperature. Current reading is: ");
+      Serial.print(temperatureCurrent);
+      Serial.print(" Temperature setting is: ");
+      Serial.print(temperatureSetting);
+      Serial.println();
+      if (automaticTemperature){
+        if (temperatureCurrent < temperatureSetting.toFloat()){
+          Serial.println("Start heating!");
+          relayOn();
+        }else{
+          Serial.println("Stop heating!");
+          relayOff();
+        }
       }
    }
 }
 
 void loop(void){
-   doThermostatThingy();
-   //readTime();
+   doThermostat();
    server.handleClient();
 }
