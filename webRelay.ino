@@ -8,12 +8,15 @@
 #include <ESP8266HTTPClient.h>
 
 #define ONE_WIRE_BUS D2  // DS18B20 pin
-#define RELAY_PIN D0 // Relay pin
+#define RELAY_PIN D1 // Relay pin
 
 const char* ssid = "barabasz";
 const char* password = "My heart is beating";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
-
+String thingSpeakApiKey="YCBDILDHYMXXBLUE";
+String thingSpeakFieldName="field1";
+String pageUsername= "admin";
+String pagePassword= "admin";
 String storageFilePath ="/storage.json";
 String temperatureSetting = "20"; //Defaults only for case when there is no storage yet
 float temperatureCurrent = 19.0;
@@ -21,8 +24,8 @@ String relayState = "false";
 static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
 String TimeDate;
 boolean automaticTemperature;
-HTTPClient http;
 
+HTTPClient http;
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 ESP8266WebServer server(80);
@@ -154,6 +157,56 @@ void relayOff(){
   persist();
 }
 
+//Check if header is present and correct
+bool is_authentified(){
+  Serial.println("Enter is_authentified");
+  if (server.hasHeader("Cookie")){   
+    Serial.print("Found cookie: ");
+    String cookie = server.header("Cookie");
+    Serial.println(cookie);
+    if (cookie.indexOf("ESPSESSIONID=1") != -1) {
+      Serial.println("Authentification Successful");
+      return true;
+    }
+  }
+  Serial.println("Authentification Failed");
+  return false;  
+}
+
+//login page, also called for disconnect
+void handleLogin(){
+  String msg;
+  if (server.hasHeader("Cookie")){   
+    Serial.print("Found cookie: ");
+    String cookie = server.header("Cookie");
+    Serial.println(cookie);
+  }
+  if (server.hasArg("DISCONNECT")){
+    Serial.println("Disconnection");
+    String header = "HTTP/1.1 301 OK\r\nSet-Cookie: ESPSESSIONID=0\r\nLocation: /login\r\nCache-Control: no-cache\r\n\r\n";
+    server.sendContent(header);
+    return;
+  }
+  if (server.hasArg("USERNAME") && server.hasArg("PASSWORD")){
+    if (server.arg("USERNAME") == pageUsername &&  server.arg("PASSWORD") == pagePassword ){
+      String header = "HTTP/1.1 301 OK\r\nSet-Cookie: ESPSESSIONID=1\r\nLocation: /\r\nCache-Control: no-cache\r\n\r\n";
+      server.sendContent(header);
+      Serial.println("Log in Successful");
+      return;
+    }
+  msg = "Wrong username/password! try again.";
+  Serial.println("Log in Failed");
+  }
+  String content = "<html><body><form action='/login' method='POST'>To log in, please use : admin/admin<br>";
+  content += "User:<input type='text' name='USERNAME' placeholder='user name'><br>";
+  content += "Password:<input type='password' name='PASSWORD' placeholder='password'><br>";
+  content += "<input type='submit' name='SUBMIT' value='Submit'></form>" + msg + "<br>";
+  content += "You also can go <a href='/inline'>here</a></body></html>";
+  server.send(200, "text/html", content);
+}
+
+
+
 void setup(void){
   SPIFFS.begin();
   pinMode(RELAY_PIN, OUTPUT);
@@ -180,14 +233,12 @@ void setup(void){
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
-
-
-//WiFi.softAP("ESP8266Thermostat");
-//IPAddress myIP = WiFi.softAPIP();
-
-  
-
   server.on("/", [](){
+    if (!is_authentified()){
+      String header = "HTTP/1.1 301 OK\r\nLocation: /login\r\nCache-Control: no-cache\r\n\r\n";
+      server.sendContent(header);
+      return;
+    }
     server.send(200, "text/html", _index_html);
   });
   server.on("/api/on",[](){
@@ -206,8 +257,6 @@ void setup(void){
     }else{
       automaticTemperature = false;
     }
-    // reset last measure time
-    lastSampleTime = 0 - timeBetweenMeasures;
     persist();
     server.send(200, "text/html", "");
   });
@@ -216,30 +265,32 @@ void setup(void){
     server.send(200, "application/json", readFromStorage());
   });
 
+  server.on("/login", handleLogin);
+
+
+  //here the list of headers to be recorded
+  const char * headerkeys[] = {"User-Agent","Cookie"} ;
+  size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
+  //ask server to track these headers
+  server.collectHeaders(headerkeys, headerkeyssize );
   server.begin();
   Serial.println("HTTP server started");
-
- 
 }
 
 float readTemperature(){
   float temp;
-  /*
   do {
     DS18B20.requestTemperatures(); 
     temp = DS18B20.getTempCByIndex(0);
     Serial.print("Temperature: ");
     Serial.println(temp);
   } while (temp == 85.0 || temp == (-127.0));
-  */
-  temp = 19.0;
   return temp;
 }
 
 void doSendToThingSpeak(){
   Serial.print("Sending to thingspeak");
-  Serial.print("/update?api_key=YCBDILDHYMXXBLUE&field1=" + String(temperatureCurrent));
-  http.begin("api.thingspeak.com", 80, "/update?api_key=YCBDILDHYMXXBLUE&field1=" + String(temperatureCurrent)); 
+  http.begin("api.thingspeak.com", 80, "/update?api_key=" + thingSpeakApiKey + "&" + thingSpeakFieldName + "=" + String(temperatureCurrent)); 
   int httpCode = http.GET();
   Serial.print("Connected");
   if(httpCode) {
