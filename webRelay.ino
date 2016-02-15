@@ -1,16 +1,17 @@
-#include <ArduinoJson.h>
+ #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <FS.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <ESP8266HTTPClient.h>
 
 #define ONE_WIRE_BUS D2  // DS18B20 pin
-#define RELAY_PIN D1 // Relay pin
+#define RELAY_PIN D0 // Relay pin
 
-const char* ssid = "pregowane_niewiadomo_co";
-const char* password = "@Bynum17";
+const char* ssid = "barabasz";
+const char* password = "My heart is beating";
 const unsigned long timeBetweenMeasures = 5 * 60 * 1000UL; // fiveMinutes
 
 String storageFilePath ="/storage.json";
@@ -20,6 +21,7 @@ String relayState = "false";
 static unsigned long lastSampleTime = 0 - timeBetweenMeasures;  
 String TimeDate;
 boolean automaticTemperature;
+HTTPClient http;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -216,25 +218,48 @@ void setup(void){
 
   server.begin();
   Serial.println("HTTP server started");
+
+ 
 }
 
 float readTemperature(){
   float temp;
+  /*
   do {
     DS18B20.requestTemperatures(); 
     temp = DS18B20.getTempCByIndex(0);
     Serial.print("Temperature: ");
     Serial.println(temp);
   } while (temp == 85.0 || temp == (-127.0));
-  
+  */
+  temp = 19.0;
   return temp;
 }
+
+void doSendToThingSpeak(){
+  Serial.print("Sending to thingspeak");
+  Serial.print("/update?api_key=YCBDILDHYMXXBLUE&field1=" + String(temperatureCurrent));
+  http.begin("api.thingspeak.com", 80, "/update?api_key=YCBDILDHYMXXBLUE&field1=" + String(temperatureCurrent)); 
+  int httpCode = http.GET();
+  Serial.print("Connected");
+  if(httpCode) {
+    if(httpCode == 200) {
+      Serial.print("Sending to thingspeak done!");
+    }else{
+      Serial.print("Problem sending to thingspeak httpCode=" + httpCode);
+    }
+  }else{
+    Serial.print("Problem sending to thingspeak couldn't get anything");
+  }
+}
+
 
 void doThermostat(){
   unsigned long now = millis();
    if (now - lastSampleTime >= timeBetweenMeasures){
       lastSampleTime += timeBetweenMeasures;
       temperatureCurrent = readTemperature();
+      doSendToThingSpeak();
       persist();
       Serial.print("Checking temperature. Current reading is: ");
       Serial.print(temperatureCurrent);
